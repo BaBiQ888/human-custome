@@ -115,13 +115,14 @@ namespace LKZ.Logics
 
                 _showUITextAction.Invoke(obj.text);
 
-                onceResult += obj.text;
+                onceResult = obj.text;
             }
             else
             {
                 if (string.IsNullOrEmpty(onceResult))
                     return;
 
+                onceResult = obj.text;
                 SendCommand.Send(new SettingVoiceRecognitionCommand { IsStartVoiceRecognition = false });//停止语音识别
 
                 SendCommand.Send(new AddChatContentCommand { infoType = Enum.InfoType.ChatGPT, _addTextAction = value => _showUITextAction = value });

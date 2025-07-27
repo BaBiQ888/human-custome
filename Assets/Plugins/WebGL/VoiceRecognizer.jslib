@@ -37,6 +37,9 @@ var VoiceRecognizerPlugin = {
         // 重采样相关
         needsResampling: false,
         actualSampleRate: 0,
+
+        // 流式识别去重
+        lastRecognitionText: "",
         
         // 初始化WebSocket连接
         initWebSocket: function(url) {
@@ -324,14 +327,14 @@ var VoiceRecognizerPlugin = {
                 VoiceRecognizer.sessionActive = true;
                 VoiceRecognizer.isRecording = true;
 
-                // 初始化音频发送控制状态
+                // 完全重置并初始化音频发送控制状态
                 var now = Date.now();
                 VoiceRecognizer.recordingStartTime = now;
                 VoiceRecognizer.lastResultTime = now;
                 VoiceRecognizer.isSendingAudio = false;  // 开始时不立即发送，等待检测到声音
                 VoiceRecognizer.silenceStartTime = 0;
 
-                console.log('音频发送控制状态已初始化');
+                console.log('音频发送控制状态已完全重置并初始化，录音开始时间:', new Date(now).toLocaleTimeString());
 
                 // 启动音频上下文
                 console.log('音频上下文状态:', VoiceRecognizer.audioContext ? VoiceRecognizer.audioContext.state : 'null');
@@ -429,6 +432,7 @@ var VoiceRecognizerPlugin = {
             VoiceRecognizer.isSendingAudio = false;
             VoiceRecognizer.silenceStartTime = 0;
             VoiceRecognizer.lastResultTime = Date.now();
+            // 注意：这里不重置recordingStartTime，因为这只是中间状态重置
         },
 
         // 结束识别周期
@@ -439,6 +443,14 @@ var VoiceRecognizerPlugin = {
             VoiceRecognizer.isSendingAudio = false;
             VoiceRecognizer.isRecording = false;
 
+            // 重置录音相关时间戳
+            VoiceRecognizer.recordingStartTime = 0;
+            VoiceRecognizer.silenceStartTime = 0;
+            VoiceRecognizer.lastResultTime = 0;
+
+            // 重置识别文本状态
+            VoiceRecognizer.lastRecognitionText = "";
+
             // 停止超时检测
             if (VoiceRecognizer.resultTimeoutInterval) {
                 clearInterval(VoiceRecognizer.resultTimeoutInterval);
@@ -448,7 +460,7 @@ var VoiceRecognizerPlugin = {
             // 通知Unity端识别周期结束
             SendMessage(VoiceRecognizer.gameObjectName, 'OnWebGLConnectionStatus', 'recognition_complete');
 
-            console.log('识别周期已结束，等待下一轮开始');
+            console.log('识别周期已结束，录音时间戳已重置，等待下一轮开始');
         },
 
         // 设置录音状态（保持兼容性，但逻辑简化）
@@ -456,11 +468,26 @@ var VoiceRecognizerPlugin = {
             // 在新的架构下，录音状态由会话管理，这里主要用于兼容
             console.log('设置录音状态:', isRecording);
 
-            if (isRecording && !VoiceRecognizer.sessionActive) {
-                // 如果还没有会话，尝试请求权限
-                if (!VoiceRecognizer.permissionGranted) {
-                    VoiceRecognizer.requestMicrophonePermission();
+            if (isRecording) {
+                if (!VoiceRecognizer.sessionActive) {
+                    if (VoiceRecognizer.permissionGranted) {
+                        // 权限已获取但会话未激活，重新启动会话
+                        console.log('权限已获取，重新启动语音识别会话');
+                        VoiceRecognizer.startSession();
+                    } else {
+                        // 权限未获取，请求权限
+                        console.log('权限未获取，请求麦克风权限');
+                        VoiceRecognizer.requestMicrophonePermission();
+                    }
+                } else {
+                    // 会话已激活，确保录音状态正确
+                    console.log('会话已激活，确保录音状态正确');
+                    VoiceRecognizer.isRecording = true;
                 }
+            } else {
+                // 停止录音
+                console.log('停止录音');
+                VoiceRecognizer.isRecording = false;
             }
         }
     },
