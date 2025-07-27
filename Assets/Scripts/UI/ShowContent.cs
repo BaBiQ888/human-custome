@@ -62,6 +62,10 @@ namespace LKZ.UI
             _text.text += str;
         }
 
+        public void SetText(in string str)
+        {
+            _text.text = str;  // 直接替换，不累积
+        }
 
         private void LateUpdate()
         {

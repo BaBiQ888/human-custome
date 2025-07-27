@@ -22,16 +22,18 @@ namespace LKZ.UI
         [SerializeField]
         private GameObject _my_Go, _gpt_go;
 
-        [SerializeField, Tooltip("¼ä¸ô")]
+        [SerializeField, Tooltip("ï¿½ï¿½ï¿½")]
         private float interval = 15f;
 
-        [SerializeField, Tooltip("Éú³ÉÊı¾İÊÇ·ñÍùÉÏÒÆ¶¯¶àÉÙ")]
+        [SerializeField, Tooltip("ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ç·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æ¶ï¿½ï¿½ï¿½ï¿½ï¿½")]
         private float GPTGenerateContentUpMove = 30f;
 
         private ShowContent currentShowContent;
 
+        private bool isCurrentUserInput = false;
+
         /// <summary>
-        /// Éú³ÉÄÚÈİºÍ²»Éú³ÉÄÚÈİ¹ö¶¯ÊÓÍ¼µÄÎ»ÖÃ
+        /// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½İºÍ²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½İ¹ï¿½ï¿½ï¿½ï¿½ï¿½Í¼ï¿½ï¿½Î»ï¿½ï¿½
         /// </summary>
         private Vector3 defaultPos, GPTGenerateContentPos;
          
@@ -39,7 +41,7 @@ namespace LKZ.UI
         private bool isSetScrollRectNormalizedPosition;
 
         /// <summary>
-        /// ÊÇ·ñÔÙÉú³ÉGPTÄÚÈİ
+        /// ï¿½Ç·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½GPTï¿½ï¿½ï¿½ï¿½
         /// </summary>
         private bool isGenerateGPTContent;
 
@@ -101,11 +103,13 @@ namespace LKZ.UI
             {
                 case InfoType.My:
                     currentShowContent = Instantiate(_my_Go, _scrollRect_Content).GetComponent<ShowContent>();
-                  //  pos.x = ScreenWidth;
+                    //  pos.x = ScreenWidth;
+                    isCurrentUserInput = true; 
                     break;
                 case InfoType.ChatGPT:
                     currentShowContent = Instantiate(_gpt_go, _scrollRect_Content).GetComponent<ShowContent>();
                     isGenerateGPTContent = true;
+                    isCurrentUserInput = false;
                     break;
             }
 
@@ -122,7 +126,16 @@ namespace LKZ.UI
 
         private void AddShowText(string c)
         {
-            currentShowContent.AddText(c);
+            if (isCurrentUserInput)
+            {
+                // ç”¨æˆ·è¾“å…¥ï¼šä½¿ç”¨æ›¿æ¢æ˜¾ç¤º
+                currentShowContent.SetText(c);
+            }
+            else
+            {
+                // LLMå“åº”ï¼šä½¿ç”¨ç´¯ç§¯æ˜¾ç¤º
+                currentShowContent.AddText(c);
+            }
         }
 
         private void LateUpdate()
@@ -141,7 +154,7 @@ namespace LKZ.UI
                 _scrollRect.verticalNormalizedPosition = Mathf.Lerp(_scrollRect.verticalNormalizedPosition, 0, 0.05f);
 
 #if !UNITY_STANDALONE_WIN
-            //´¦ÀíÍùÉÏÒÆ¶¯
+            //ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æ¶ï¿½
             thisRect.anchoredPosition = Vector3.Lerp(this.thisRect.anchoredPosition, isGenerateGPTContent ? this.GPTGenerateContentPos : this.defaultPos, 0.05f);
 #endif
         }
