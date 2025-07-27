@@ -17,10 +17,7 @@ namespace LKZ.Manager
     public sealed class GameApp : MonoBehaviour, DIAwakeInterface, IDRegisterBindingInterface
     {
         [SerializeField, TextArea]
-        private string StartContent =
-@"ÎÒÊÇÒ»¸öÓÉÄ¾×ÓÀî¿ª·¢µÄGPTÁÄÌì»úÆ÷ÈË
-Äã¿ÉÒÔÓïÒôºÍÎÒÁÄÌì
-Èç¹ûÄãÓĞÆäËûĞèÇó£¬ÇëÁªÏµwx:LKZ4251";
+        private string StartContent ="æ¬¢è¿æ¬¢è¿";
 
 
         private VoiceRecognizerModel voiceRecognizer;
@@ -63,9 +60,9 @@ namespace LKZ.Manager
             llmLogic.Initialized();
 
             SendCommand.Send(new AddChatContentCommand { infoType = Enum.InfoType.ChatGPT, _addTextAction = value => value.Invoke(StartContent) });
-            SendCommand.Send(new GenerateFinishCommand { });//Éú³ÉÍê³ÉÃüÁî
+            SendCommand.Send(new GenerateFinishCommand { });//ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
              
-            SendCommand.Send(new SettingVoiceRecognitionCommand { IsStartVoiceRecognition = true });//¿ªÊ¼ÓïÒôÊ¶±ğ
+            SendCommand.Send(new SettingVoiceRecognitionCommand { IsStartVoiceRecognition = true });//ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½Ê¶ï¿½ï¿½
 
         }
 
@@ -74,5 +71,66 @@ namespace LKZ.Manager
         {
             voiceRecognizer.OnDestroy();
         }
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+        // WebGLå¹³å°çš„è¯­éŸ³è¯†åˆ«å›è°ƒæ¡¥æ¥æ–¹æ³•
+        public void OnWebGLRecognitionResult(string result)
+        {
+            Debug.Log($"GameAppæ”¶åˆ°WebGLè¯­éŸ³è¯†åˆ«ç»“æœ: {result}");
+
+            if (voiceRecognizer?.voiceRecognizer is VoiceRecognizerWebGL webglRecognizer)
+            {
+                webglRecognizer.OnWebGLRecognitionResult(result);
+            }
+            else
+            {
+                Debug.LogWarning("æ— æ³•è·å–VoiceRecognizerWebGLå®ä¾‹");
+            }
+        }
+
+        public void OnWebGLConnectionStatus(string status)
+        {
+            Debug.Log($"GameAppæ”¶åˆ°WebGLè¿æ¥çŠ¶æ€: {status}");
+
+            if (voiceRecognizer?.voiceRecognizer is VoiceRecognizerWebGL webglRecognizer)
+            {
+                webglRecognizer.OnWebGLConnectionStatus(status);
+            }
+            else
+            {
+                Debug.LogWarning("æ— æ³•è·å–VoiceRecognizerWebGLå®ä¾‹");
+            }
+        }
+
+        public void OnWebGLError(string error)
+        {
+            Debug.LogError($"GameAppæ”¶åˆ°WebGLé”™è¯¯: {error}");
+
+            if (voiceRecognizer?.voiceRecognizer is VoiceRecognizerWebGL webglRecognizer)
+            {
+                webglRecognizer.OnWebGLError(error);
+            }
+            else
+            {
+                Debug.LogWarning("æ— æ³•è·å–VoiceRecognizerWebGLå®ä¾‹");
+            }
+        }
+#else
+        // éWebGLå¹³å°çš„ç©ºå®ç°ï¼Œé¿å…JavaScriptè°ƒç”¨é”™è¯¯
+        public void OnWebGLRecognitionResult(string result)
+        {
+            Debug.LogWarning($"WebGLè¯­éŸ³è¯†åˆ«å›è°ƒåœ¨éWebGLå¹³å°è¢«è°ƒç”¨: {result}");
+        }
+
+        public void OnWebGLConnectionStatus(string status)
+        {
+            Debug.LogWarning($"WebGLè¿æ¥çŠ¶æ€å›è°ƒåœ¨éWebGLå¹³å°è¢«è°ƒç”¨: {status}");
+        }
+
+        public void OnWebGLError(string error)
+        {
+            Debug.LogWarning($"WebGLé”™è¯¯å›è°ƒåœ¨éWebGLå¹³å°è¢«è°ƒç”¨: {error}");
+        }
+#endif
     }
 }
