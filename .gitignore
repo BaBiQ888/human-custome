@@ -5,3 +5,4 @@ ProjectSettings
 *.log
 Temp
 Web
+.DS_Store

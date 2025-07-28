@@ -31,7 +31,7 @@ namespace LKZ.VoiceSynthesis
         public static IEnumerator Synthesis(string content)
         {
             // 构建URL，添加URL编码处理中文字符
-            string url = $"http://47.79.16.41:5001/tts?content={UnityWebRequest.EscapeURL(content)}&id='abin'";
+            string url = $"http://47.79.16.41:5001/tts?content={UnityWebRequest.EscapeURL(content)}&id=晓伊";
 
             Debug.Log($"请求TTS: {url}");
 
