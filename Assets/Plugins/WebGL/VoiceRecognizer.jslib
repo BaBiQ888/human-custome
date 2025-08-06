@@ -230,15 +230,15 @@ var VoiceRecognizerPlugin = {
                     console.log("VoiceRecognizer.isRecording:",VoiceRecognizer.isRecording)
                     console.log("webSocketReady:",webSocketReady)
 
-                    
                     if (VoiceRecognizer.isRecording && webSocketReady) {
                         var inputBuffer = event.inputBuffer.getChannelData(0);
 
                         // 计算当前音频缓冲区的音量
                         var volume = VoiceRecognizer.calculateVolume(inputBuffer);
-
+                        var isSendingAudio = VoiceRecognizer.shouldSendAudio(volume);
+                        console.log("isSendingAudio:",isSendingAudio)
                         // 检查是否应该发送音频数据
-                        if (VoiceRecognizer.shouldSendAudio(volume)) {
+                        if (isSendingAudio) {
                             VoiceRecognizer.processAudioData(inputBuffer);
                         } else {
                             // 不发送音频，但继续监听
