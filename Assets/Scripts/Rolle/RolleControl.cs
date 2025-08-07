@@ -4,7 +4,7 @@ using UnityEngine;
 namespace LKZ.Rolle
 {
     /// <summary>
-    /// ½ÇÉ«¿ØÖÆÆ÷
+    /// ï¿½ï¿½É«ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     /// </summary>
     public class RolleControl : MonoBehaviour
     {
@@ -28,7 +28,7 @@ namespace LKZ.Rolle
         private Animator _animator;
 
         /// <summary>
-        /// ÐÐÀñ¶¯»­³ÖÐøÊ±¼ä
+        /// ï¿½ï¿½ï¿½ñ¶¯»ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½
         /// </summary>
         public float saluteDurationTime = 4.5f;
 
@@ -62,7 +62,7 @@ namespace LKZ.Rolle
         }
 
         /// <summary>
-        /// ´¥·¢ÐÐÀñ¶¯»­
+        /// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ñ¶¯»ï¿½
         /// </summary>
         internal void TriggerSaluteAnimation()
         {

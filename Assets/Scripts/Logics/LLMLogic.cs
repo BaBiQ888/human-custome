@@ -1708,24 +1708,36 @@ namespace LKZ.Logics
         private IEnumerator UnifiedAudioSynchronizationCoroutine()
         {
             Debug.Log("🎵 统一服务音频同步协程启动");
-            
+            float idleTimeout = 3.0f; // 如果音频队列为空，且超过3秒没有收到LLM结束消息，则强制结束
+            float idleTimer = 0f;
+
             while (!isStopCreate && (unifiedAudioQueue.Count > 0 || !isRequestChatGPTContent))
             {
                 if (unifiedAudioQueue.Count == 0)
                 {
-                    yield return new WaitForSeconds(0.1f);
+                    // 音频队列已空，但仍在等待LLM的is_end=true信号，启动超时计时器
+                    idleTimer += Time.deltaTime;
+                    if (idleTimer > idleTimeout)
+                    {
+                        Debug.LogWarning($"⚠️ 等待LLM结束消息超时 ({idleTimeout}s)，强制结束对话流程。");
+                        break; // 超时，强制跳出循环
+                    }
+                    yield return null; // 等待下一帧
                     continue;
                 }
 
+                // 有音频要处理，重置计时器
+                idleTimer = 0f;
+
                 var segment = unifiedAudioQueue.Peek();
-                
+
                 // 🔧 等待音频段完全准备好
                 if (!segment.isComplete || segment.generatedClip == null)
                 {
                     yield return new WaitForSeconds(0.05f);
                     continue;
                 }
-                
+
                 // 🔧 防重复播放：检查是否已经在播放中
                 if (audioModel.IsPlaying && segment.isPlaying) // 修正：IsPlaying是属性
                 {
@@ -1736,25 +1748,25 @@ namespace LKZ.Logics
                 // 移除并播放
                 segment = unifiedAudioQueue.Dequeue();
                 segment.isPlaying = true; // 标记正在播放
-                
+
                 float actualDuration = segment.generatedClip.length;
-                
+
                 Debug.Log($"🔊 播放音频段: '{segment.text.Substring(0, Math.Min(segment.text.Length, 30))}...', " +
                   $"实际时长: {actualDuration:F2}秒");
-                
+
                 audioModel.Play(segment.generatedClip);
                 // 🔧 启动字幕协程
                 _mono.StartCoroutine(PlaySubtitlesForSegment(segment, actualDuration));
-                
-                // 🔧 等待音频播放完成
-                yield return new WaitForSeconds(actualDuration);
-                
+
+                // [修复1] 使用WaitWhile等待真实播放结束，解决动画提前停止问题
+                yield return new WaitWhile(() => audioModel.IsPlaying);
+
                 segment.isPlaying = false; // 标记播放完成
             }
-            
+
             Debug.Log("🎵 统一服务音频同步协程结束");
-            
-            // 🔧 播放完成后调用Finish，以重置状态并开启下一轮语音识别
+
+            // [修复2] 确保PlayFinish总是被调用，以重启监听
             PlayFinish();
         }
 

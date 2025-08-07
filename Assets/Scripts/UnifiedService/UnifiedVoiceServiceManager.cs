@@ -11,6 +11,7 @@ using LKZ.TypeEventSystem;
 using LKZ.Commands.UnifiedService;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using LKZ.Commands.Chat;
 
 namespace LKZ.UnifiedService
 {
@@ -183,6 +184,7 @@ namespace LKZ.UnifiedService
             RegisterCommand.Register<DisconnectUnifiedServiceCommand>(OnDisconnectCommand);
             RegisterCommand.Register<SendAudioDataCommand>(OnSendAudioDataCommand);
             RegisterCommand.Register<SendTextDirectlyCommand>(OnSendTextDirectlyCommand);
+            RegisterCommand.Register<GenerateFinishCommand>(OnGenerateFinish); // 🔧 [新增] 监听生成结束命令
         }
         #endregion
 
@@ -439,7 +441,67 @@ namespace LKZ.UnifiedService
         /// </summary>
         private void OnSendAudioDataCommand(SendAudioDataCommand command)
         {
-            SendAudioData(command.audioData);
+            // 🔧 [修复] 核心逻辑修改：根据状态决定是直接发送音频还是开启新对话
+            if (CurrentState == UnifiedServiceState.ConversationActive)
+            {
+                // 如果对话已激活，直接发送音频
+                SendAudioData(command.audioData);
+            }
+            else if (CurrentState == UnifiedServiceState.Connected)
+            {
+                // 如果只是已连接（空闲），则这次音频输入被视为开启新对话的信号
+                Debug.Log("🎤 检测到音频输入，自动开启新对话...");
+                StartConversationAndSendAudio(command.audioData);
+            }
+            else
+            {
+                Debug.LogWarning($"⚠️ 当前状态为 {CurrentState}，无法发送音频数据。");
+            }
+        }
+
+        /// <summary>
+        /// 开启新对话并发送第一个音频包
+        /// </summary>
+        private void StartConversationAndSendAudio(byte[] initialAudioData)
+        {
+            _mono.StartCoroutine(StartConversationAndSendAudioCoroutine(initialAudioData));
+        }
+
+        private IEnumerator StartConversationAndSendAudioCoroutine(byte[] initialAudioData)
+        {
+            // 1. 发送开始对话请求
+            yield return _mono.StartCoroutine(StartConversationCoroutine());
+
+            // 2. 等待服务端确认对话已激活
+            float timeout = 5f; // 等待5秒
+            while (CurrentState != UnifiedServiceState.ConversationActive && timeout > 0)
+            {
+                timeout -= Time.deltaTime;
+                yield return null;
+            }
+
+            // 3. 发送第一个音频包
+            if (CurrentState == UnifiedServiceState.ConversationActive)
+            {
+                Debug.Log("✅ 新对话已成功开启，发送首个音频包...");
+                SendAudioData(initialAudioData);
+            }
+            else
+            {
+                Debug.LogError("❌ 开启新对话失败或超时，音频数据未能发送。");
+            }
+        }
+
+        /// <summary>
+        /// 处理生成完成命令（由LLMLogic发送）
+        /// </summary>
+        private void OnGenerateFinish(GenerateFinishCommand command)
+        {
+            if (CurrentState == UnifiedServiceState.ConversationActive)
+            {
+                Debug.Log("🏁 收到生成完成信号，对话状态重置为空闲（Connected）。");
+                ChangeState(UnifiedServiceState.Connected);
+            }
         }
 
         /// <summary>
@@ -1038,6 +1100,7 @@ namespace LKZ.UnifiedService
                     RegisterCommand.UnRegister<DisconnectUnifiedServiceCommand>(OnDisconnectCommand);
                     RegisterCommand.UnRegister<SendAudioDataCommand>(OnSendAudioDataCommand);
                     RegisterCommand.UnRegister<SendTextDirectlyCommand>(OnSendTextDirectlyCommand);
+                    RegisterCommand.UnRegister<GenerateFinishCommand>(OnGenerateFinish); // 🔧 [新增] 取消注册生成结束命令
                 }
                 catch (Exception ex)
                 {
