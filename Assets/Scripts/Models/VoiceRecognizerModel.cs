@@ -152,6 +152,8 @@ namespace LKZ.Voice
         /// <param name="command">ASR结果命令</param>
         private void OnUnifiedASRResult(UnifiedASRResultCommand command)
         {
+            Debug.Log($"🔧 OnUnifiedASRResult被调用 - text: '{command.text}', isFinal: {command.isFinal}");
+            
             // 将统一服务的ASR结果转换为原有的格式，保持兼容性
             voiceRecognitionResult.text = command.text;
             voiceRecognitionResult.IsComplete = command.isFinal;
@@ -159,11 +161,15 @@ namespace LKZ.Voice
             Debug.Log($"🎤 统一服务ASR结果: '{command.text}' (最终: {command.isFinal})");
 
             // 发送原有的语音识别结果命令，保持与其他模块的兼容
+            Debug.Log($"🔧 准备发送VoiceRecognitionResultCommand");
+            
             SendCommand.Send(new VoiceRecognitionResultCommand
             {
                 text = command.text,
                 IsComplete = command.isFinal
             });
+            
+            Debug.Log($"🔧 VoiceRecognitionResultCommand已发送");
         }
 
         /// <summary>
@@ -748,8 +754,8 @@ namespace LKZ.Voice
                     // 将Base64数据转换为字节数组
                     byte[] audioData = System.Convert.FromBase64String(base64AudioData);
                     
-                    // 通过回调转发给主模块处理
-                    onAudioDataCallback?.Invoke(audioData);
+                    // [修复] 移除将用户录音发送到TTS播放逻辑的错误回调
+                    // onAudioDataCallback?.Invoke(audioData);
                     
                     // 保持原有回调机制（兼容性）
                     audioCallback?.Invoke(audioData);

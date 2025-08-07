@@ -57,6 +57,8 @@ namespace LKZ.Logics
             public AudioClip generatedClip;
             public bool isComplete;
             public float estimatedDuration;
+            public string originalText; // Added for storing the original text
+            public bool isPlaying; // Added for tracking playback status
 
             public UnifiedAudioSegment(string text)
             {
@@ -64,6 +66,7 @@ namespace LKZ.Logics
                 this.audioChunks = new Queue<byte[]>();
                 this.isComplete = false;
                 this.estimatedDuration = 0f;
+                this.isPlaying = false; // Initialize
             }
         }
 
@@ -105,6 +108,11 @@ namespace LKZ.Logics
         private string currentLLMAccumulatedText = ""; // Added
 
         /// <summary>
+        /// 已显示文本集合，用于精确去重
+        /// </summary>
+        private HashSet<string> displayedTexts = new HashSet<string>(); // 🔧 新增字段定义
+
+        /// <summary>
         /// 统一服务模式下的字幕同步协程
         /// </summary>
         private Coroutine _unifiedAudioSyncCoroutine; // Added
@@ -126,6 +134,11 @@ namespace LKZ.Logics
         /// 字幕同步携程
         /// </summary>
         private Coroutine _requestGPTSegmentationCor;
+
+        /// <summary>
+        /// 当前对话的首次LLM回复是否已处理
+        /// </summary>
+        private bool hasProcessedFirstLLMReply = false;
 
         public void Initialized()
         {
@@ -190,8 +203,11 @@ namespace LKZ.Logics
         /// <param name="obj"></param>
         private void VoiceRecognitionResultCommandCallback(VoiceRecognitionResultCommand obj)
         {
+            Debug.Log($"🔧 VoiceRecognitionResultCommandCallback被调用 - text: '{obj.text}', IsComplete: {obj.IsComplete}");
+            
             if (!obj.IsComplete)
             {
+                Debug.Log($"🔧 ASR中间结果，准备创建用户对话框");
                 // 实时显示识别中的文本
                 if (_showUITextAction == null)
                     SendCommand.Send(new AddChatContentCommand { infoType = Enum.InfoType.My, _addTextAction = value => _showUITextAction = value });
@@ -201,6 +217,7 @@ namespace LKZ.Logics
             }
             else
             {
+                Debug.Log($"🔧 ASR最终结果，准备创建ChatGPT对话框");
                 // 语音识别完成
                 if (string.IsNullOrEmpty(onceResult))
                     return;
@@ -394,31 +411,58 @@ namespace LKZ.Logics
 
                 Debug.Log($"🤖 收到LLM回复: '{command.text}' (首次: {command.isFirst}, 结束: {command.isEnd})");
 
-                if (command.isFirst)
+                // 🔧 修复：只在真正的首次回复时重置
+                if (command.isFirst && !hasProcessedFirstLLMReply)
                 {
-                    // 第一段回复，重置状态并准备开始播放
+                    hasProcessedFirstLLMReply = true;
+                    displayedTexts.Clear();
+                    currentLLMAccumulatedText = "";
+                    Debug.Log("🔄 LLM首次回复，重置累积文本和去重集合");
+                    
+                    // 发送开始对话命令
                     SendCommand.Send(new ChatGPTStartTalkCommand());
-                    currentLLMAccumulatedText = ""; // 🔧 重置累积文本，避免重复
-                    Debug.Log("🔄 LLM首次回复，重置累积文本");
+                    IncrementEventCounter("LLMFirstReply");
                 }
 
-                // 🔧 优化：只累积新文本，避免重复
+                // 🔧 处理文本：分离对话内容和动作描述
                 if (!string.IsNullOrEmpty(command.text))
                 {
-                    // 检查文本是否已经存在于累积文本中
-                    if (!currentLLMAccumulatedText.Contains(command.text))
+                    // 提取动作描述用于角色控制
+                    var actionDescriptions = ExtractActionDescriptions(command.text);
+                    foreach (var action in actionDescriptions)
                     {
-                        currentLLMAccumulatedText += command.text;
-                        if (_showUITextAction != null)
+                        Debug.Log($"🎭 检测到动作描述: '{action}'");
+                        // TODO: 这里可以发送动作命令给角色控制系统
+                        // SendCommand.Send(new CharacterActionCommand { action = action });
+                    }
+                    
+                    // 过滤掉动作描述，只保留对话内容
+                    string dialogueText = FilterActionDescriptions(command.text);
+                    
+                    if (!string.IsNullOrEmpty(dialogueText))
+                    {
+                        // 🔧 使用HashSet精确去重
+                        if (!displayedTexts.Contains(dialogueText))
                         {
-                            _showUITextAction.Invoke(command.text);
+                            displayedTexts.Add(dialogueText);
+                            currentLLMAccumulatedText += dialogueText;
+                            
+                            // 🔧 [移除] 不再此处直接显示UI，交由字幕协程处理
+                            // if (_showUITextAction != null)
+                            // {
+                            //     _showUITextAction.Invoke(dialogueText);
+                            // }
+                            Debug.Log($"📝 累积新文本（已过滤）: '{dialogueText}', 总长度: {currentLLMAccumulatedText.Length}");
                         }
-                        Debug.Log($"📝 累积新文本: '{command.text}', 总长度: {currentLLMAccumulatedText.Length}");
+                        else
+                        {
+                            Debug.LogWarning($"⚠️ 跳过重复文本: '{dialogueText}'");
+                            IncrementEventCounter("DuplicateTextSkipped");
+                        }
                     }
                     else
                     {
-                        Debug.LogWarning($"⚠️ 跳过重复文本: '{command.text}'");
-                        IncrementEventCounter("DuplicateTextSkipped");
+                        Debug.Log($"📝 文本全为动作描述，跳过UI显示: '{command.text}'");
                     }
                 }
 
@@ -429,7 +473,7 @@ namespace LKZ.Logics
                     Debug.Log($"✅ LLM回复完成，总文本: '{currentLLMAccumulatedText}'");
                     
                     // 如果统一音频同步协程还没有启动，现在启动
-                    if (_unifiedAudioSyncCoroutine == null)
+                    if (_unifiedAudioSyncCoroutine == null && unifiedAudioQueue.Count > 0)
                     {
                         _unifiedAudioSyncCoroutine = _mono.StartCoroutine(UnifiedAudioSynchronizationCoroutine());
                     }
@@ -455,11 +499,41 @@ namespace LKZ.Logics
                     return; // 跳过重复事件
                 }
 
-                Debug.Log($"🔊 音频开始: '{command.text}'");
+                // 🔧 严格的去重检查 - 防止重复音频段
+                bool isDuplicate = false;
+                foreach (var existingSegment in unifiedAudioQueue)
+                {
+                    if (existingSegment.text == command.text)
+                    {
+                        Debug.LogWarning($"⚠️ 跳过重复音频段: '{command.text}'");
+                        isDuplicate = true;
+                        break;
+                    }
+                }
                 
-                // 创建新的音频段
-                var audioSegment = new UnifiedAudioSegment(command.text);
+                if (isDuplicate)
+                {
+                    IncrementEventCounter("DuplicateAudioSegmentSkipped");
+                    return;
+                }
+
+                // 🔧 过滤动作描述，只保留对话内容用于字幕
+                string dialogueText = FilterActionDescriptions(command.text);
+                
+                if (string.IsNullOrEmpty(dialogueText))
+                {
+                    Debug.Log($"🎭 音频段全为动作描述，跳过字幕显示: '{command.text}'");
+                    return;
+                }
+
+                Debug.Log($"🔊 音频开始: '{dialogueText}'");
+                
+                // 创建新的音频段（使用过滤后的文本）
+                var audioSegment = new UnifiedAudioSegment(dialogueText);
                 unifiedAudioQueue.Enqueue(audioSegment);
+                
+                // 存储原始文本用于音频匹配
+                audioSegment.originalText = command.text;
                 
                 // 🔧 如果有缓冲的音频数据，立即添加到新创建的音频段
                 int processedChunks = ProcessPendingAudioChunks(audioSegment);
@@ -561,10 +635,10 @@ namespace LKZ.Logics
                     }
                     
                     // 🔧 尝试触发延迟音频段创建
-                    if (_pendingAudioChunks.Count >= 3 && _delayedSegmentCreation == null)
-                    {
-                        _delayedSegmentCreation = _mono.StartCoroutine(DelayedAudioSegmentCreation());
-                    }
+                    // if (_pendingAudioChunks.Count >= 3 && _delayedSegmentCreation == null)
+                    // {
+                    //     _delayedSegmentCreation = _mono.StartCoroutine(DelayedAudioSegmentCreation());
+                    // }
                 }
             }
             catch (Exception ex)
@@ -752,41 +826,83 @@ namespace LKZ.Logics
         /// </summary>
         private IEnumerator ProcessAudioChunksCoroutine(UnifiedAudioSegment segment)
         {
-            List<byte> combinedData = new List<byte>();
-            int totalChunks = segment.audioChunks.Count;
-            int processedChunks = 0;
-            
-            // 合并音频块
-            while (segment.audioChunks.Count > 0)
+            try 
             {
-                var chunk = SafeProcessAudioChunk(segment.audioChunks);
-                if (chunk != null && chunk.Length > 0)
+                byte[] combinedData = CombineAudioChunks(segment.audioChunks);
+                
+                // 🔧 添加音频格式检测
+                if (IsMP3Format(combinedData))
                 {
-                    combinedData.AddRange(chunk);
-                    processedChunks++;
+                    Debug.LogWarning($"⚠️ 检测到MP3格式音频，需要转换: '{segment.text}'");
+                    // MP3格式需要特殊处理或转换
+                    SafeGenerateSilenceClipForSegment(segment, 0.1f);
+                    yield break;
                 }
                 
-                // 🔧 让出控制权，避免长时间阻塞
-                if (processedChunks % 10 == 0)
+                // 🔧 添加音频数据验证
+                if (!IsValidPCMData(combinedData))
                 {
-                    yield return null;
+                    Debug.LogWarning($"⚠️ 音频数据格式无效: '{segment.text}', 数据长度: {combinedData.Length}");
+                    SafeGenerateSilenceClipForSegment(segment, 0.1f);
+                    yield break;
+                }
+                
+                SafeCreateAudioClip(segment, combinedData);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"❌ 音频处理异常: {ex.Message}");
+                SafeGenerateSilenceClipForSegment(segment, 0.1f);
+            }
+        }
+
+        private byte[] CombineAudioChunks(Queue<byte[]> chunks)
+        {
+            List<byte> combined = new List<byte>();
+            while (chunks.Count > 0)
+            {
+                var chunk = chunks.Dequeue();
+                if (chunk != null && chunk.Length > 0)
+                {
+                    combined.AddRange(chunk);
                 }
             }
+            return combined.ToArray();
+        }
 
-            Debug.Log($"🔄 音频块合并完成: {processedChunks}/{totalChunks} 块, 总大小: {combinedData.Count} bytes");
-
-            // 🔧 数据有效性检查
-            if (combinedData.Count == 0)
-            {
-                Debug.LogWarning($"⚠️ 合并后音频数据为空，生成静音段");
-                SafeGenerateSilenceClipForSegment(segment, 0.1f);
-                yield break;
-            }
-
-            // 创建AudioClip（非协程部分）
-            SafeCreateAudioClip(segment, combinedData.ToArray());
+        private bool IsMP3Format(byte[] data)
+        {
+            // 检测MP3文件头（ID3标签或MPEG帧头）
+            if (data.Length < 3) return false;
             
-            yield return null;
+            // MP3文件通常以ID3标签开始
+            if (data[0] == 0x49 && data[1] == 0x44 && data[2] == 0x33) // "ID3"
+                return true;
+                
+            // 或者以MPEG帧头开始
+            if (data.Length >= 2 && (data[0] == 0xFF && (data[1] & 0xE0) == 0xE0))
+                return true;
+                
+            return false;
+        }
+
+        private bool IsValidPCMData(byte[] data)
+        {
+            // 基本验证：数据长度应该是2的倍数（16位PCM）
+            if (data.Length % 2 != 0) return false;
+            
+            // 检查数据是否全为零（无效音频）
+            bool hasNonZero = false;
+            for (int i = 0; i < Math.Min(data.Length, 1000); i++)
+            {
+                if (data[i] != 0)
+                {
+                    hasNonZero = true;
+                    break;
+                }
+            }
+            
+            return hasNonZero;
         }
 
         /// <summary>
@@ -1541,9 +1657,55 @@ namespace LKZ.Logics
         }
 
         /// <summary>
-        /// 统一服务音频同步协程
+        /// 过滤动作描述文字，只保留真正的对话内容
         /// </summary>
-        private IEnumerator UnifiedAudioSynchronizationCoroutine() // Added
+        private string FilterActionDescriptions(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return text;
+            
+            // 移除动作描述（星号包围的文字）
+            string filteredText = System.Text.RegularExpressions.Regex.Replace(
+                text, 
+                @"\*[^*]*\*", 
+                ""
+            );
+            
+            // 清理多余的换行符和空格
+            filteredText = System.Text.RegularExpressions.Regex.Replace(
+                filteredText, 
+                @"\n\s*\n", 
+                "\n"
+            ).Trim();
+            
+            return filteredText;
+        }
+
+        /// <summary>
+        /// 提取动作描述文字，用于控制角色动画
+        /// </summary>
+        private List<string> ExtractActionDescriptions(string text)
+        {
+            var actions = new List<string>();
+            if (string.IsNullOrEmpty(text))
+                return actions;
+            
+            var matches = System.Text.RegularExpressions.Regex.Matches(text, @"\*([^*]*)\*");
+            foreach (System.Text.RegularExpressions.Match match in matches)
+            {
+                if (match.Groups.Count > 1)
+                {
+                    actions.Add(match.Groups[1].Value.Trim());
+                }
+            }
+            
+            return actions;
+        }
+
+        /// <summary>
+        /// 统一服务音频同步协程 - 优化版
+        /// </summary>
+        private IEnumerator UnifiedAudioSynchronizationCoroutine()
         {
             Debug.Log("🎵 统一服务音频同步协程启动");
             
@@ -1551,66 +1713,55 @@ namespace LKZ.Logics
             {
                 if (unifiedAudioQueue.Count == 0)
                 {
-                    yield return new WaitForSeconds(0.1f); // 🔧 减少轮询频率
+                    yield return new WaitForSeconds(0.1f);
                     continue;
                 }
 
                 var segment = unifiedAudioQueue.Peek();
                 
-                // 🔧 改进的等待逻辑：提供超时和状态检查
-                float waitStartTime = Time.time;
-                float maxWaitTime = 10.0f; // 最多等待10秒
-                
-                while (!segment.isComplete || segment.generatedClip == null)
+                // 🔧 等待音频段完全准备好
+                if (!segment.isComplete || segment.generatedClip == null)
                 {
-                    if (isStopCreate)
-                        yield break;
-                        
-                    // 🔧 超时保护
-                    if (Time.time - waitStartTime > maxWaitTime)
-                    {
-                        Debug.LogWarning($"⚠️ 音频段 '{segment.text}' 生成超时，跳过播放");
-                        unifiedAudioQueue.Dequeue(); // 移除问题段
-                        break;
-                    }
-                    
-                    yield return new WaitForSeconds(0.05f); // 🔧 减少等待粒度
+                    yield return new WaitForSeconds(0.05f);
+                    continue;
+                }
+                
+                // 🔧 防重复播放：检查是否已经在播放中
+                if (audioModel.IsPlaying && segment.isPlaying) // 修正：IsPlaying是属性
+                {
+                    yield return new WaitForSeconds(0.1f);
+                    continue;
                 }
 
-                // 🔧 只有在成功生成AudioClip时才播放
-                if (segment.isComplete && segment.generatedClip != null)
-                {
-                    // 移除并播放这个段
-                    segment = unifiedAudioQueue.Dequeue();
-                    
-                    Debug.Log($"🔊 播放音频段: '{segment.text.Substring(0, Math.Min(segment.text.Length, 30))}...', 时长: {segment.estimatedDuration:F2}秒");
-                    
-                    audioModel.Play(segment.generatedClip);
-                    
-                    // 🔧 并行播放字幕，不阻塞下一段准备
-                    _mono.StartCoroutine(PlaySubtitlesForSegment(segment));
-                    
-                    // 🔧 等待音频播放完成（但不阻塞字幕）
-                    yield return new WaitForSeconds(segment.estimatedDuration);
-                    
-                    // 🔧 清理AudioClip（使用内存管理系统）
-                    if (segment.generatedClip != null)
-                    {
-                        UnregisterAudioClip(segment.generatedClip);
-                    }
-                }
+                // 移除并播放
+                segment = unifiedAudioQueue.Dequeue();
+                segment.isPlaying = true; // 标记正在播放
                 
-                yield return null;
+                float actualDuration = segment.generatedClip.length;
+                
+                Debug.Log($"🔊 播放音频段: '{segment.text.Substring(0, Math.Min(segment.text.Length, 30))}...', " +
+                  $"实际时长: {actualDuration:F2}秒");
+                
+                audioModel.Play(segment.generatedClip);
+                // 🔧 启动字幕协程
+                _mono.StartCoroutine(PlaySubtitlesForSegment(segment, actualDuration));
+                
+                // 🔧 等待音频播放完成
+                yield return new WaitForSeconds(actualDuration);
+                
+                segment.isPlaying = false; // 标记播放完成
             }
-
+            
             Debug.Log("🎵 统一服务音频同步协程结束");
+            
+            // 🔧 播放完成后调用Finish，以重置状态并开启下一轮语音识别
             PlayFinish();
         }
 
         /// <summary>
         /// 为音频段播放字幕
         /// </summary>
-        private IEnumerator PlaySubtitlesForSegment(UnifiedAudioSegment segment) // Added
+        private IEnumerator PlaySubtitlesForSegment(UnifiedAudioSegment segment, float actualDuration) // Added
         {
             if (_showUITextAction == null || string.IsNullOrEmpty(segment.text))
                 yield break;
@@ -1618,13 +1769,13 @@ namespace LKZ.Logics
             float startTime = Time.time;
             int lastCharIndex = -1;
             
-            while (audioModel.IsPlaying && (Time.time - startTime) < segment.estimatedDuration)
+            while (audioModel.IsPlaying && (Time.time - startTime) < actualDuration)
             {
                 if (isStopCreate)
                     break;
 
                 float elapsed = Time.time - startTime;
-                float progress = elapsed / segment.estimatedDuration;
+                float progress = elapsed / actualDuration;  // 🔧 使用实际时长
                 int charIndex = Mathf.Clamp((int)(progress * segment.text.Length), 0, segment.text.Length - 1);
                 
                 if (charIndex != lastCharIndex && charIndex < segment.text.Length)

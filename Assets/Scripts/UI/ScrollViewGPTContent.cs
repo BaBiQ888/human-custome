@@ -172,7 +172,7 @@ namespace LKZ.UI
             else
             {
                 // LLM响应：使用累积显示
-                currentShowContent.SetText(c);
+                currentShowContent.AddText(c);
             }
         }
 

@@ -750,11 +750,20 @@ namespace LKZ.UnifiedService
 
                 Debug.Log($"🎤 ASR识别结果: '{text}' (最终: {isFinal})");
 
-                SendCommand.Send(new UnifiedASRResultCommand
+                // 添加详细调试信息
+                Debug.Log($"🔧 准备发送UnifiedASRResultCommand - SendCommand是否为null: {SendCommand == null}");
+
+                var command = new UnifiedASRResultCommand
                 {
                     text = text,
                     isFinal = isFinal
-                });
+                };
+
+                Debug.Log($"🔧 UnifiedASRResultCommand创建成功: text='{command.text}', isFinal={command.isFinal}");
+
+                SendCommand.Send(command);
+
+                Debug.Log($"🔧 UnifiedASRResultCommand已发送");
             }
             catch (Exception ex)
             {

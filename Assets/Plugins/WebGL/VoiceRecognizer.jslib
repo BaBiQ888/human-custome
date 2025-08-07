@@ -146,6 +146,12 @@ var VoiceRecognizerPlugin = {
         
         // 请求麦克风权限（延迟调用）
         requestMicrophonePermission: function() {
+            // 添加检查，防止重复初始化
+            if (VoiceRecognizer.permissionGranted && VoiceRecognizer.audioContext) {
+                console.log('⚠️ 麦克风权限已获取且音频处理已设置，跳过重复初始化');
+                return;
+            }
+
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                 SendMessage(VoiceRecognizer.gameObjectName, 'OnWebGLError', '浏览器不支持麦克风访问');
                 return;
@@ -208,7 +214,7 @@ var VoiceRecognizerPlugin = {
                 var processor = VoiceRecognizer.audioContext.createScriptProcessor(VoiceRecognizer.bufferSize, 1, 1);
 
                 processor.onaudioprocess = function(event) {
-                    console.log('🎵 onaudioprocess回调触发', Date.now());
+                    //console.log('🎵 onaudioprocess回调触发', Date.now());
                     // 🔧 兼容统一服务和传统模式的WebSocket检查
                     var activeWebSocket = VoiceRecognizer.useUnifiedService ? VoiceRecognizer.unifiedWebSocket : VoiceRecognizer.webSocket;
                     var webSocketReady = activeWebSocket && activeWebSocket.readyState === WebSocket.OPEN;
@@ -227,8 +233,8 @@ var VoiceRecognizerPlugin = {
                         });
                     }
 
-                    console.log("VoiceRecognizer.isRecording:",VoiceRecognizer.isRecording)
-                    console.log("webSocketReady:",webSocketReady)
+                    //console.log("VoiceRecognizer.isRecording:",VoiceRecognizer.isRecording)
+                    //console.log("webSocketReady:",webSocketReady)
 
                     if (VoiceRecognizer.isRecording && webSocketReady) {
                         var inputBuffer = event.inputBuffer.getChannelData(0);
@@ -236,7 +242,7 @@ var VoiceRecognizerPlugin = {
                         // 计算当前音频缓冲区的音量
                         var volume = VoiceRecognizer.calculateVolume(inputBuffer);
                         var isSendingAudio = VoiceRecognizer.shouldSendAudio(volume);
-                        console.log("isSendingAudio:",isSendingAudio)
+                        //console.log("isSendingAudio:",isSendingAudio)
                         // 检查是否应该发送音频数据
                         if (isSendingAudio) {
                             VoiceRecognizer.processAudioData(inputBuffer);
@@ -250,8 +256,11 @@ var VoiceRecognizerPlugin = {
                 };
 
                 source.connect(processor);
-                // 🔧 修复：不连接到destination，避免音频回放和回音
-                // processor.connect(VoiceRecognizer.audioContext.destination);
+                // 🔧 正确修复：使用静音GainNode确保音频处理器正常工作
+                var gainNode = VoiceRecognizer.audioContext.createGain();
+                gainNode.gain.value = 0; // 静音处理，避免音频回放
+                processor.connect(gainNode);
+                gainNode.connect(VoiceRecognizer.audioContext.destination);
 
                 console.log('WebGL音频处理设置完成');
                 console.log('缓冲区大小:', VoiceRecognizer.bufferSize);
@@ -386,7 +395,7 @@ var VoiceRecognizerPlugin = {
 
             // 检查最大录音时间
             if (now - VoiceRecognizer.recordingStartTime > VoiceRecognizer.maxRecordingTime) {
-                console.log('达到最大录音时间，停止发送音频');
+                //console.log('达到最大录音时间，停止发送音频');
                 return false;
             }
 
@@ -782,14 +791,17 @@ var VoiceRecognizerPlugin = {
             try {
                 console.log('🎤 收到ASR结果:', data.text, '最终:', data.is_final);
                 
-                var resultData = JSON.stringify({
+                // 🔧 修复：直接通过统一服务的WebSocket适配器传递消息
+                // 构造完整的ASR结果消息
+                var asrMessage = JSON.stringify({
+                    type: 'asr_result',  // 使用正确的消息类型
                     text: data.text || '',
                     is_final: data.is_final || false,
                     timestamp: Date.now()
                 });
                 
-                // 使用原有的回调方法保持兼容性
-                SendMessage(VoiceRecognizer.gameObjectName, 'OnWebGLRecognitionResult', resultData);
+                // 发送到统一服务的WebSocket适配器
+                SendMessage(VoiceRecognizer.unifiedGameObjectName, 'OnUnifiedWebSocketTextMessage', asrMessage);
                 
             } catch (error) {
                 console.error('❌ 处理ASR结果异常:', error);
