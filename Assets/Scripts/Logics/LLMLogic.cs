@@ -419,8 +419,11 @@ namespace LKZ.Logics
                     currentLLMAccumulatedText = "";
                     Debug.Log("🔄 LLM首次回复，重置累积文本和去重集合");
                     
-                    // 发送开始对话命令
-                    SendCommand.Send(new ChatGPTStartTalkCommand());
+                    // 🔧 优化：在LLMLogic中移除过早的动画触发
+                    // SendCommand.Send(new ChatGPTStartTalkCommand());
+                    
+                    // �� 新增：标记准备开始，但等待音频就绪
+                    // isReadyForAnimation = true; // This variable is not defined in the original code
                     IncrementEventCounter("LLMFirstReply");
                 }
 
@@ -472,10 +475,10 @@ namespace LKZ.Logics
                     isRequestChatGPTContent = true;
                     Debug.Log($"✅ LLM回复完成，总文本: '{currentLLMAccumulatedText}'");
                     
-                    // 如果统一音频同步协程还没有启动，现在启动
+                    // 🔧 优化：当LLM完成且有音频时，统一启动
                     if (_unifiedAudioSyncCoroutine == null && unifiedAudioQueue.Count > 0)
                     {
-                        _unifiedAudioSyncCoroutine = _mono.StartCoroutine(UnifiedAudioSynchronizationCoroutine());
+                        _unifiedAudioSyncCoroutine = _mono.StartCoroutine(OptimizedUnifiedAudioSynchronizationCoroutine());
                     }
                 }
             }
@@ -520,13 +523,13 @@ namespace LKZ.Logics
                 // 🔧 过滤动作描述，只保留对话内容用于字幕
                 string dialogueText = FilterActionDescriptions(command.text);
                 
-                if (string.IsNullOrEmpty(dialogueText))
+                if (string.IsNullOrEmpty(dialogueText) || IsNonSpeechText(dialogueText))
                 {
-                    Debug.Log($"🎭 音频段全为动作描述，跳过字幕显示: '{command.text}'");
+                    Debug.Log($"⏭️ 跳过非语音音频段: '{command.text}'");
                     return;
                 }
 
-                Debug.Log($"🔊 音频开始: '{dialogueText}'");
+                Debug.Log($"🔊 音频段开始预处理: '{dialogueText}'");
                 
                 // 创建新的音频段（使用过滤后的文本）
                 var audioSegment = new UnifiedAudioSegment(dialogueText);
@@ -545,7 +548,7 @@ namespace LKZ.Logics
                 // 启动音频同步协程（如果还没启动）
                 if (_unifiedAudioSyncCoroutine == null)
                 {
-                    _unifiedAudioSyncCoroutine = _mono.StartCoroutine(UnifiedAudioSynchronizationCoroutine());
+                    _unifiedAudioSyncCoroutine = _mono.StartCoroutine(OptimizedUnifiedAudioSynchronizationCoroutine());
                 }
             }
             catch (Exception ex)
@@ -698,7 +701,7 @@ namespace LKZ.Logics
             // 生成事件ID
             string eventId = timestamp > 0 
                 ? $"{eventType}_{identifier}_{timestamp:F3}" 
-                : $"{eventType}_{identifier}_{DateTime.Now.Ticks}";
+                : $"{eventType}_{identifier}";
             
             // 检查是否已处理
             if (_processedEventIds.Contains(eventId))
@@ -745,7 +748,8 @@ namespace LKZ.Logics
                     bool segmentFound = false;
                     foreach (var segment in segments)
                     {
-                        if (segment.text == command.text && !segment.isComplete)
+                        var endDialogue = FilterActionDescriptions(command.text);
+                        if ((segment.originalText == command.text) || (segment.text == endDialogue))
                         {
                             segment.isComplete = true;
                             // 开始生成AudioClip
@@ -764,6 +768,13 @@ namespace LKZ.Logics
                 else
                 {
                     Debug.LogWarning("⚠️ 音频结束但队列为空");
+                }
+
+                string dialogueText = FilterActionDescriptions(command.text);
+                if (IsTooShortAudioBytes(command.totalSize) || string.IsNullOrWhiteSpace(dialogueText) || IsNonSpeechText(dialogueText))
+                {
+                    DropSegmentForText(command.text, dialogueText);
+                    return; // 不生成AudioClip，不进入播放
                 }
             }
             catch (Exception ex)
@@ -1060,42 +1071,82 @@ namespace LKZ.Logics
         /// <summary>
         /// 🔧 音频后处理（音量调整、噪音抑制等）
         /// </summary>
-        private float[] PostProcessAudio(float[] audioData)
+        private float[] PostProcessAudio(float[] audio)
         {
             try
             {
-                if (audioData == null || audioData.Length == 0)
-                    return audioData;
+                if (audio == null || audio.Length == 0) return audio;
 
-                // 🔧 音量归一化
-                float maxAmplitude = 0f;
-                for (int i = 0; i < audioData.Length; i++)
+                // 1) 去直流（DC offset）
+                float mean = 0f;
+                for (int i = 0; i < audio.Length; i++) mean += audio[i];
+                mean /= audio.Length;
+                for (int i = 0; i < audio.Length; i++) audio[i] -= mean;
+
+                // 2) 峰值分析
+                float maxAbs = 0f;
+                for (int i = 0; i < audio.Length; i++)
                 {
-                    maxAmplitude = Math.Max(maxAmplitude, Math.Abs(audioData[i]));
+                    float a = Mathf.Abs(audio[i]);
+                    if (a > maxAbs) maxAbs = a;
                 }
 
-                if (maxAmplitude > 0.001f && maxAmplitude < 0.5f)
+                // 3) 预留头间距（headroom）：若过高则整体降增益
+                const float headroom = 0.85f; // 预留15%空间
+                if (maxAbs > headroom)
                 {
-                    // 如果音量过低，进行适度放大
-                    float gainFactor = 0.7f / maxAmplitude; // 放大到70%水平
-                    gainFactor = Math.Min(gainFactor, 3.0f); // 限制最大放大倍数
-                    
-                    for (int i = 0; i < audioData.Length; i++)
-                    {
-                        audioData[i] *= gainFactor;
-                        // 确保不会溢出
-                        audioData[i] = Math.Max(-1.0f, Math.Min(1.0f, audioData[i]));
-                    }
-                    
-                    Debug.Log($"🔧 音频音量调整: 放大 {gainFactor:F2} 倍");
+                    float k = headroom / Mathf.Max(maxAbs, 1e-6f);
+                    for (int i = 0; i < audio.Length; i++) audio[i] *= k;
+                    maxAbs = headroom;
+                }
+                // 4) 仅在很低音量时适度增益（避免把峰值推到极限）
+                else if (maxAbs > 0.001f && maxAbs < 0.35f)
+                {
+                    float targetPeak = 0.5f;               // 目标峰值
+                    float k = targetPeak / maxAbs;
+                    k = Mathf.Min(k, 2.0f);                // 最多放大2倍
+                    for (int i = 0; i < audio.Length; i++) audio[i] *= k;
+                    maxAbs = Mathf.Min(targetPeak, headroom);
                 }
 
-                return audioData;
+                // 5) 软限制（soft clip）进一步抑制尖峰
+                for (int i = 0; i < audio.Length; i++)
+                {
+                    float v = audio[i] * 1.2f;             // 轻微预增益
+                    v = (float)System.Math.Tanh(v);        // 注意：System.Math.Tanh
+                    audio[i] = v * 0.9f;                   // 回拉一点，留余量
+                }
+
+                // 6) 首尾淡入/淡出（10-15ms）
+                ApplyFadeInOut(audio, (int)(0.012f * 16000)); // 12ms@16kHz
+
+                return audio;
             }
             catch (Exception ex)
             {
                 Debug.LogError($"❌ 音频后处理异常: {ex}");
-                return audioData; // 返回原始数据
+                return audio;
+            }
+        }
+
+        private void ApplyFadeInOut(float[] data, int fadeSamples)
+        {
+            if (data == null || data.Length == 0) return;
+            int n = data.Length;
+            fadeSamples = Mathf.Clamp(fadeSamples, 1, n / 4);
+
+            // 淡入
+            for (int i = 0; i < fadeSamples; i++)
+            {
+                float t = i / (float)fadeSamples;
+                data[i] *= t;
+            }
+            // 淡出
+            for (int i = 0; i < fadeSamples; i++)
+            {
+                float t = i / (float)fadeSamples;
+                int idx = n - 1 - i;
+                data[idx] *= t;
             }
         }
 
@@ -1705,68 +1756,88 @@ namespace LKZ.Logics
         /// <summary>
         /// 统一服务音频同步协程 - 优化版
         /// </summary>
-        private IEnumerator UnifiedAudioSynchronizationCoroutine()
+        private IEnumerator OptimizedUnifiedAudioSynchronizationCoroutine()
         {
-            Debug.Log("🎵 统一服务音频同步协程启动");
-            float idleTimeout = 3.0f; // 如果音频队列为空，且超过3秒没有收到LLM结束消息，则强制结束
+            Debug.Log("🎵 优化版统一服务音频同步协程启动");
+            
+            // 🔧 第一步：确保有音频段准备好再启动动画
+            yield return new WaitUntil(() => 
+                unifiedAudioQueue.Count > 0 && 
+                unifiedAudioQueue.Peek().isComplete && 
+                unifiedAudioQueue.Peek().generatedClip != null);
+            
+            // 🔧 第二步：音频准备好了，启动动画
+            Debug.Log("🎭 音频准备完成，启动动画");
+            SendCommand.Send(new ChatGPTStartTalkCommand());
+            
+            float idleTimeout = 3.0f;
             float idleTimer = 0f;
+            bool isFirstSegment = true;
 
             while (!isStopCreate && (unifiedAudioQueue.Count > 0 || !isRequestChatGPTContent))
             {
                 if (unifiedAudioQueue.Count == 0)
                 {
-                    // 音频队列已空，但仍在等待LLM的is_end=true信号，启动超时计时器
                     idleTimer += Time.deltaTime;
                     if (idleTimer > idleTimeout)
                     {
-                        Debug.LogWarning($"⚠️ 等待LLM结束消息超时 ({idleTimeout}s)，强制结束对话流程。");
-                        break; // 超时，强制跳出循环
+                        Debug.LogWarning($"⚠️ 等待音频超时，强制结束");
+                        break;
                     }
-                    yield return null; // 等待下一帧
+                    yield return null;
                     continue;
                 }
 
-                // 有音频要处理，重置计时器
                 idleTimer = 0f;
-
                 var segment = unifiedAudioQueue.Peek();
 
                 // 🔧 等待音频段完全准备好
                 if (!segment.isComplete || segment.generatedClip == null)
                 {
+                    yield return new WaitForSeconds(0.02f); // 减少等待时间，提高响应速度
+                    continue;
+                }
+
+                // 🔧 检查是否已在播放
+                if (audioModel.IsPlaying && segment.isPlaying)
+                {
                     yield return new WaitForSeconds(0.05f);
                     continue;
                 }
 
-                // 🔧 防重复播放：检查是否已经在播放中
-                if (audioModel.IsPlaying && segment.isPlaying) // 修正：IsPlaying是属性
-                {
-                    yield return new WaitForSeconds(0.1f);
-                    continue;
-                }
-
-                // 移除并播放
+                // 🔧 开始播放音频段
                 segment = unifiedAudioQueue.Dequeue();
-                segment.isPlaying = true; // 标记正在播放
+                segment.isPlaying = true;
 
                 float actualDuration = segment.generatedClip.length;
+                
+                // 🔧 第一个音频段需要特殊处理，确保动画同步
+                if (isFirstSegment)
+                {
+                    Debug.Log($"🔊 播放首个音频段: '{segment.text.Substring(0, Math.Min(segment.text.Length, 30))}...', 时长: {actualDuration:F2}秒");
+                    
+                    // 🔧 修复：使用现有的命令确保动画激活
+                    SendCommand.Send(new ChatGPTStartTalkCommand());
+                    isFirstSegment = false;
+                }
+                else
+                {
+                    Debug.Log($"🔊 播放音频段: '{segment.text.Substring(0, Math.Min(segment.text.Length, 30))}...', 时长: {actualDuration:F2}秒");
+                }
 
-                Debug.Log($"🔊 播放音频段: '{segment.text.Substring(0, Math.Min(segment.text.Length, 30))}...', " +
-                  $"实际时长: {actualDuration:F2}秒");
-
+                // 🔧 音频播放
                 audioModel.Play(segment.generatedClip);
+                
                 // 🔧 启动字幕协程
                 _mono.StartCoroutine(PlaySubtitlesForSegment(segment, actualDuration));
 
-                // [修复1] 使用WaitWhile等待真实播放结束，解决动画提前停止问题
+                // 🔧 等待播放完成
                 yield return new WaitWhile(() => audioModel.IsPlaying);
 
-                segment.isPlaying = false; // 标记播放完成
+                segment.isPlaying = false;
             }
 
-            Debug.Log("🎵 统一服务音频同步协程结束");
-
-            // [修复2] 确保PlayFinish总是被调用，以重启监听
+            Debug.Log("🎵 优化版音频同步协程结束");
             PlayFinish();
         }
 
@@ -1808,6 +1879,76 @@ namespace LKZ.Logics
                     yield return new WaitForSeconds(0.05f);
                 }
             }
+        }
+
+        /// <summary>
+        /// 🚀 智能动画强度控制
+        /// </summary>
+        private IEnumerator PlaySubtitlesWithAnimationControl(UnifiedAudioSegment segment, float actualDuration)
+        {
+            if (_showUITextAction == null || string.IsNullOrEmpty(segment.text))
+                yield break;
+
+            float startTime = Time.time;
+            int lastCharIndex = -1;
+            
+            while (audioModel.IsPlaying && (Time.time - startTime) < actualDuration)
+            {
+                if (isStopCreate) break;
+
+                float elapsed = Time.time - startTime;
+                float progress = elapsed / actualDuration;
+                int charIndex = Mathf.Clamp((int)(progress * segment.text.Length), 0, segment.text.Length - 1);
+                
+                if (charIndex != lastCharIndex && charIndex < segment.text.Length)
+                {
+                    _showUITextAction.Invoke(segment.text[charIndex].ToString());
+                    lastCharIndex = charIndex;
+                    
+                    // 🔧 修复：移除不存在的命令，改为日志记录
+                    char currentChar = segment.text[charIndex];
+                    float animationIntensity = GetAnimationIntensityForCharacter(currentChar);
+                    
+                    // 记录动画强度信息（用于调试）
+                    if (charIndex % 5 == 0) // 每5个字符记录一次，避免日志过多
+                    {
+                        Debug.Log($"🎭 字符 '{currentChar}' 动画强度: {animationIntensity:F2}");
+                    }
+                }
+                
+                yield return null;
+            }
+
+            // 显示剩余字符
+            if (lastCharIndex < segment.text.Length - 1)
+            {
+                for (int i = lastCharIndex + 1; i < segment.text.Length; i++)
+                {
+                    _showUITextAction.Invoke(segment.text[i].ToString());
+                    yield return new WaitForSeconds(0.03f); // 加快显示速度
+                }
+            }
+        }
+
+        /// <summary>
+        /// 🔧 根据字符类型获取动画强度
+        /// </summary>
+        private float GetAnimationIntensityForCharacter(char character)
+        {
+            // 元音字母需要更大的嘴部动作
+            if ("aeiouAEIOU".Contains(character))
+                return 1.0f;
+            
+            // 辅音需要中等动作
+            if (char.IsLetter(character))
+                return 0.7f;
+            
+            // 标点符号降低强度
+            if (char.IsPunctuation(character))
+                return 0.3f;
+            
+            // 默认强度
+            return 0.5f;
         }
         #endregion
 
@@ -1901,5 +2042,41 @@ namespace LKZ.Logics
             }
         }
         #endregion
+
+        // 判定是否包含语音类字符（中/英文/数字）
+        private bool ContainsSpeechLikeChars(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return false;
+            // CJK统一表意文字 + 任意字母 + 十进制数字
+            return System.Text.RegularExpressions.Regex.IsMatch(
+                text, @"[\p{IsCJKUnifiedIdeographs}\p{L}\p{Nd}]");
+        }
+
+        // 判定是否为"非语音"（纯emoji/标点/空白等）
+        private bool IsNonSpeechText(string text) => !ContainsSpeechLikeChars(text);
+
+        // 判定音频是否过短（阈值0.2秒，16k采样，16bit，单声道≈6400字节）
+        private bool IsTooShortAudioBytes(int totalBytes, int sampleRate = 16000, int channels = 1, int bitsPerSample = 16, float minSeconds = 0.2f)
+        {
+            int bytesPerSecond = sampleRate * channels * (bitsPerSample / 8);
+            return totalBytes < (int)(minSeconds * bytesPerSecond);
+        }
+
+        // 根据文本从队列移除未播放段（用于在end时丢弃）
+        private void DropSegmentForText(string originalText, string dialogueText)
+        {
+            if (unifiedAudioQueue == null || unifiedAudioQueue.Count == 0) return;
+            var list = new System.Collections.Generic.List<UnifiedAudioSegment>(unifiedAudioQueue);
+            int idx = list.FindIndex(seg => seg != null && 
+                (seg.originalText == originalText || seg.text == dialogueText));
+            if (idx >= 0)
+            {
+                var seg = list[idx];
+                if (seg.generatedClip != null) UnityEngine.Object.Destroy(seg.generatedClip);
+                list.RemoveAt(idx);
+                unifiedAudioQueue = new Queue<UnifiedAudioSegment>(list);
+                Debug.Log($"🧹 丢弃非语音/过短音频段: '{originalText}'");
+            }
+        }
     }
 }
