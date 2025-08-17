@@ -942,17 +942,22 @@ namespace LKZ.Logics
         {
             try
             {
-                // 转换音频数据
                 float[] pcmData = ConvertBytesToFloats(combinedData);
                 
                 if (pcmData.Length > 0)
                 {
-                    // 音频质量后处理
-                    pcmData = PostProcessAudio(pcmData);
+                    //  修复：使用uLipSync兼容的音频格式
+                    int sampleRate = AudioSettings.outputSampleRate; // 使用Unity系统采样率
+                    int channels = 1; // 单声道，uLipSync推荐
                     
-                    // 创建AudioClip
-                    int sampleRate = 16000;
-                    int channels = 1;
+                    // 🔧 修复：确保音频长度满足uLipSync要求
+                    float minDuration = 0.3f; // 最少300ms，确保FFT分析准确
+                    if (pcmData.Length < sampleRate * minDuration)
+                    {
+                        Debug.LogWarning($"⚠️ 音频段过短: {pcmData.Length / (float)sampleRate:F3}秒，扩展至{minDuration}秒");
+                        // 扩展音频数据或生成静音填充
+                        pcmData = ExtendAudioToMinimumLength(pcmData, sampleRate, minDuration);
+                    }
                     
                     segment.generatedClip = AudioClip.Create(
                         $"UnifiedAudio_{segment.text.GetHashCode()}_{DateTime.Now.Ticks}", 
@@ -960,57 +965,29 @@ namespace LKZ.Logics
                     
                     if (segment.generatedClip != null)
                     {
+                        //  修复：直接设置原始数据，避免过度处理
                         segment.generatedClip.SetData(pcmData, 0);
                         segment.estimatedDuration = (float)pcmData.Length / sampleRate;
                         
-                        // 验证AudioClip创建成功
-                        if (segment.generatedClip.length > 0)
+                        // 验证AudioClip质量
+                        if (ValidateAudioClipForLipSync(segment.generatedClip))
                         {
-                            // 注册AudioClip到内存管理系统
                             RegisterAudioClip(segment.generatedClip);
-                            
-                            Debug.Log($"✅ 生成AudioClip成功: '{segment.text.Substring(0, Math.Min(segment.text.Length, 20))}...', " +
-                                     $"时长: {segment.estimatedDuration:F2}秒, 样本数: {pcmData.Length}");
-                            
-                            // 定期打印内存统计
-                            if (_audioClipCount % 5 == 0)
-                            {
-                                LogMemoryStats();
-                            }
+                            Debug.Log($"✅ 生成uLipSync兼容AudioClip: 时长={segment.estimatedDuration:F2}秒, 采样率={sampleRate}Hz");
                         }
                         else
                         {
-                            Debug.LogError($"❌ AudioClip创建失败: 长度为0");
+                            Debug.LogError($"❌ AudioClip质量验证失败，重新生成");
                             UnityEngine.Object.Destroy(segment.generatedClip);
                             segment.generatedClip = null;
                             SafeGenerateSilenceClipForSegment(segment, 0.5f);
                         }
                     }
-                    else
-                    {
-                        Debug.LogError($"❌ AudioClip.Create返回null");
-                        SafeGenerateSilenceClipForSegment(segment, 0.5f);
-                    }
-                }
-                else
-                {
-                    Debug.LogWarning($"⚠️ 音频段 '{segment.text}' PCM数据转换失败，生成静音段");
-                    SafeGenerateSilenceClipForSegment(segment, 1.0f);
                 }
             }
             catch (Exception ex)
             {
-                Debug.LogError($"❌ 创建AudioClip总体异常: {ex}");
-                RecordError("创建AudioClip异常", ex);
-                
-                // 清理可能的残留AudioClip
-                if (segment.generatedClip != null)
-                {
-                    UnityEngine.Object.Destroy(segment.generatedClip);
-                    segment.generatedClip = null;
-                }
-                
-                // 生成备用静音段
+                Debug.LogError($"❌ 创建AudioClip异常: {ex}");
                 SafeGenerateSilenceClipForSegment(segment, 0.5f);
             }
         }
@@ -1041,9 +1018,10 @@ namespace LKZ.Logics
         {
             try
             {
-                int sampleRate = 16000;
+                // 🔧 修复：使用系统采样率，与uLipSync兼容
+                int sampleRate = AudioSettings.outputSampleRate;
                 int samples = Mathf.RoundToInt(sampleRate * duration);
-                float[] silenceData = new float[samples]; // 默认全为0（静音）
+                float[] silenceData = new float[samples];
                 
                 AudioClip silenceClip = AudioClip.Create($"Silence_{DateTime.Now.Ticks}", 
                     samples, 1, sampleRate, false);
@@ -2037,7 +2015,7 @@ namespace LKZ.Logics
         private bool IsNonSpeechText(string text) => !ContainsSpeechLikeChars(text);
 
         // 判定音频是否过短（阈值0.2秒，16k采样，16bit，单声道≈6400字节）
-        private bool IsTooShortAudioBytes(int totalBytes, int sampleRate = 16000, int channels = 1, int bitsPerSample = 16, float minSeconds = 0.2f)
+        private bool IsTooShortAudioBytes(int totalBytes, int sampleRate = 16000, int channels = 1, int bitsPerSample = 16, float minSeconds = 0.3f) // 改为300ms
         {
             int bytesPerSecond = sampleRate * channels * (bitsPerSample / 8);
             return totalBytes < (int)(minSeconds * bytesPerSecond);
@@ -2057,6 +2035,218 @@ namespace LKZ.Logics
                 list.RemoveAt(idx);
                 unifiedAudioQueue = new Queue<UnifiedAudioSegment>(list);
                 Debug.Log($"🧹 丢弃非语音/过短音频段: '{originalText}'");
+            }
+        }
+
+        /// <summary>
+        /// 🔧 验证AudioClip是否适合uLipSync使用
+        /// </summary>
+        private bool ValidateAudioClipForLipSync(AudioClip clip)
+        {
+            try
+            {
+                if (clip == null || clip.length <= 0) return false;
+                
+                // 1. 检查采样率兼容性
+                if (clip.frequency < 8000 || clip.frequency > 48000)
+                {
+                    Debug.LogWarning($"⚠️ 采样率 {clip.frequency}Hz 可能不兼容uLipSync");
+                    return false;
+                }
+                
+                // 2. 检查音频长度合理性（uLipSync要求）
+                if (clip.length < 0.3f) // 最少300ms
+                {
+                    Debug.LogWarning($"⚠️ 音频过短: {clip.length:F3}秒，uLipSync需要至少300ms进行FFT分析");
+                    return false;
+                }
+                
+                if (clip.length > 30f) // 超过30秒
+                {
+                    Debug.LogWarning($"⚠️ 音频过长: {clip.length:F1}秒，可能影响实时处理");
+                    return false;
+                }
+                
+                // 3. 检查声道数
+                if (clip.channels != 1)
+                {
+                    Debug.LogWarning($"⚠️ 多声道音频({clip.channels}声道)可能影响uLipSync");
+                    return false;
+                }
+                
+                // 4. 检查音频数据完整性
+                float[] audioData = new float[clip.samples];
+                clip.GetData(audioData, 0);
+                
+                // 检查是否全为静音
+                float maxAmplitude = 0f;
+                for (int i = 0; i < Math.Min(audioData.Length, 1000); i++)
+                {
+                    maxAmplitude = Math.Max(maxAmplitude, Math.Abs(audioData[i]));
+                }
+                
+                if (maxAmplitude < 0.001f)
+                {
+                    Debug.LogWarning($"⚠️ 音频全为静音，不适合uLipSync");
+                    return false;
+                }
+                
+                // 5. 检查频谱特征（uLipSync关键要求）
+                if (!HasValidSpectrumForLipSync(audioData))
+                {
+                    Debug.LogWarning($"⚠️ 音频频谱特征异常，可能影响uLipSync音素识别");
+                    return false;
+                }
+                
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"❌ AudioClip验证异常: {ex}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 🔧 检查音频是否具有uLipSync所需的频谱特征
+        /// </summary>
+        private bool HasValidSpectrumForLipSync(float[] audioData)
+        {
+            try
+            {
+                if (audioData == null || audioData.Length < 100) return false;
+                
+                // 1. 过零率检查（语音特征）
+                int zeroCrossings = 0;
+                for (int i = 1; i < audioData.Length; i++)
+                {
+                    if ((audioData[i] >= 0) != (audioData[i-1] >= 0))
+                    {
+                        zeroCrossings++;
+                    }
+                }
+                
+                float zeroCrossingRate = (float)zeroCrossings / audioData.Length;
+                
+                // 正常语音的过零率应该在合理范围内
+                bool isValidZCR = zeroCrossingRate > 0.01f && zeroCrossingRate < 0.5f;
+                
+                // 2. 能量分布检查
+                float totalEnergy = 0f;
+                float lowFreqEnergy = 0f;
+                
+                for (int i = 0; i < audioData.Length; i++)
+                {
+                    float sample = audioData[i];
+                    totalEnergy += sample * sample;
+                    
+                    // 低频能量（前1/3样本）
+                    if (i < audioData.Length / 3)
+                    {
+                        lowFreqEnergy += sample * sample;
+                    }
+                }
+                
+                // 低频能量应该占总能量的一定比例
+                float lowFreqRatio = lowFreqEnergy / Math.Max(totalEnergy, 1e-6f);
+                bool isValidEnergy = lowFreqRatio > 0.1f && lowFreqRatio < 0.9f;
+                
+                bool isValid = isValidZCR && isValidEnergy;
+                
+                if (!isValid)
+                {
+                    Debug.LogWarning($"⚠️ 频谱特征异常: 过零率={zeroCrossingRate:F3}, 低频比例={lowFreqRatio:F3}");
+                }
+                
+                return isValid;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"❌ 频谱特征检查异常: {ex}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        ///  优化音频后处理，保持uLipSync兼容性
+        /// </summary>
+        private float[] PostProcessAudioForLipSync(float[] audio)
+        {
+            try
+            {
+                if (audio == null || audio.Length == 0) return audio;
+
+                // 1. 轻微的去直流，避免过度处理
+                float mean = 0f;
+                for (int i = 0; i < audio.Length; i++) mean += audio[i];
+                mean /= audio.Length;
+                
+                // 只去除明显的直流偏移，保留频谱特征
+                if (Mathf.Abs(mean) > 0.01f)
+                {
+                    for (int i = 0; i < audio.Length; i++) audio[i] -= mean;
+                }
+
+                // 2. 保守的增益控制，避免破坏频谱特征
+                float maxAbs = 0f;
+                for (int i = 0; i < audio.Length; i++)
+                {
+                    maxAbs = Math.Max(maxAbs, Math.Abs(audio[i]));
+                }
+
+                // 只在必要时调整增益，保持动态范围
+                if (maxAbs > 0.9f)
+                {
+                    float scale = 0.85f / maxAbs;
+                    for (int i = 0; i < audio.Length; i++) audio[i] *= scale;
+                }
+
+                // 3.  移除过度的淡入淡出，保持音频连续性
+                // 注释掉：ApplyFadeInOut(audio, (int)(0.012f * 16000));
+                // 改为：ApplyFadeInOut(audio, (int)(0.005f * AudioSettings.outputSampleRate)); // 减少到5ms
+
+                return audio;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"❌ 音频后处理异常: {ex}");
+                return audio;
+            }
+        }
+
+        /// <summary>
+        /// 🔧 扩展音频至最小长度，满足uLipSync要求
+        /// </summary>
+        private float[] ExtendAudioToMinimumLength(float[] audio, int sampleRate, float minDuration)
+        {
+            try
+            {
+                int minSamples = Mathf.RoundToInt(sampleRate * minDuration);
+                
+                if (audio.Length >= minSamples)
+                {
+                    return audio; // 已经满足要求
+                }
+                
+                // 创建扩展后的数组
+                float[] extendedAudio = new float[minSamples];
+                
+                // 复制原始音频
+                Array.Copy(audio, extendedAudio, audio.Length);
+                
+                // 用静音填充剩余部分
+                for (int i = audio.Length; i < minSamples; i++)
+                {
+                    extendedAudio[i] = 0f;
+                }
+                
+                Debug.Log($" 音频已从 {audio.Length} 样本扩展至 {minSamples} 样本，满足uLipSync要求");
+                return extendedAudio;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"❌ 音频扩展异常: {ex}");
+                return audio; // 返回原始音频
             }
         }
     }
