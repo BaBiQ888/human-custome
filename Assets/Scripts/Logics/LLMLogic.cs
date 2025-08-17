@@ -423,10 +423,8 @@ namespace LKZ.Logics
                     Debug.Log("🔄 LLM首次回复，重置累积文本和去重集合");
                     
                     // 🔧 优化：在LLMLogic中移除过早的动画触发
-                    // SendCommand.Send(new ChatGPTStartTalkCommand());
+                    SendCommand.Send(new ChatGPTStartTalkCommand());
                     
-                    // �� 新增：标记准备开始，但等待音频就绪
-                    // isReadyForAnimation = true; // This variable is not defined in the original code
                     IncrementEventCounter("LLMFirstReply");
                 }
 
@@ -469,6 +467,18 @@ namespace LKZ.Logics
                     else
                     {
                         Debug.Log($"📝 文本全为动作描述，跳过UI显示: '{command.text}'");
+                    }
+                    if (command.isEnd)
+                    {
+                        // LLM回复完成
+                        isRequestChatGPTContent = true;
+                        Debug.Log($"✅ LLM回复完成，总文本: '{currentLLMAccumulatedText}'");
+                        
+                        // 🔧 优化：当LLM完成且有音频时，统一启动
+                        if (_unifiedAudioSyncCoroutine == null && unifiedAudioQueue.Count > 0)
+                        {
+                            _unifiedAudioSyncCoroutine = _mono.StartCoroutine(OptimizedUnifiedAudioSynchronizationCoroutine());
+                        }
                     }
                 }
             }
@@ -628,10 +638,10 @@ namespace LKZ.Logics
                     }
                     
                     // 🔧 尝试触发延迟音频段创建
-                    // if (_pendingAudioChunks.Count >= 3 && _delayedSegmentCreation == null)
-                    // {
-                    //     _delayedSegmentCreation = _mono.StartCoroutine(DelayedAudioSegmentCreation());
-                    // }
+                    if (_pendingAudioChunks.Count >= 3 && _delayedSegmentCreation == null)
+                    {
+                        _delayedSegmentCreation = _mono.StartCoroutine(DelayedAudioSegmentCreation());
+                    }
                 }
             }
             catch (Exception ex)
@@ -1738,11 +1748,11 @@ namespace LKZ.Logics
             // 🔧 第二步：音频准备好了，启动动画
             Debug.Log("🎭 音频准备完成，启动动画");
             // 🔧 第一个音频段需要特殊处理，确保动画同步
-            // if (!isTalkingAnimationStarted)
-            // {
-            //     SendCommand.Send(new ChatGPTStartTalkCommand());
-            //     isTalkingAnimationStarted = true;
-            // }
+            if (!isTalkingAnimationStarted)
+            {
+                SendCommand.Send(new ChatGPTStartTalkCommand());
+                isTalkingAnimationStarted = true;
+            }
             
             float idleTimeout = 3.0f;
             float idleTimer = 0f;
@@ -2202,7 +2212,7 @@ namespace LKZ.Logics
                 }
 
                 // 3.  移除过度的淡入淡出，保持音频连续性
-                // 注释掉：ApplyFadeInOut(audio, (int)(0.012f * 16000));
+                ApplyFadeInOut(audio, (int)(0.012f * 16000));
                 // 改为：ApplyFadeInOut(audio, (int)(0.005f * AudioSettings.outputSampleRate)); // 减少到5ms
 
                 return audio;
