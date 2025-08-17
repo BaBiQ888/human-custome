@@ -1756,16 +1756,15 @@ namespace LKZ.Logics
                 unifiedAudioQueue.Peek().isComplete && 
                 unifiedAudioQueue.Peek().generatedClip != null);
             
-            bool isFirstSegment = true;
-
+            
             // 🔧 第二步：音频准备好了，启动动画
             Debug.Log("🎭 音频准备完成，启动动画");
             // 🔧 第一个音频段需要特殊处理，确保动画同步
-            if (!isTalkingAnimationStarted)
-            {
-                SendCommand.Send(new ChatGPTStartTalkCommand());
-                isTalkingAnimationStarted = true;
-            }
+            // if (!isTalkingAnimationStarted)
+            // {
+            //     SendCommand.Send(new ChatGPTStartTalkCommand());
+            //     isTalkingAnimationStarted = true;
+            // }
             
             float idleTimeout = 3.0f;
             float idleTimer = 0f;
