@@ -44,7 +44,7 @@ namespace LKZ.Voice
             Debug.Log("🎤 VoiceRecognizerModel初始化 - 统一服务模式");
 
             // 注册原有命令监听
-            // RegisterCommand.Register<SettingVoiceRecognitionCommand>(SettingVoiceRecognitionCommandCallback);
+            RegisterCommand.Register<SettingVoiceRecognitionCommand>(SettingVoiceRecognitionCommandCallback);
 
             // 注册统一服务事件监听
             RegisterCommand.Register<UnifiedASRResultCommand>(OnUnifiedASRResult);
@@ -376,7 +376,7 @@ namespace LKZ.Voice
             {
                 try
                 {
-                    // RegisterCommand.UnRegister<SettingVoiceRecognitionCommand>(SettingVoiceRecognitionCommandCallback);
+                    RegisterCommand.UnRegister<SettingVoiceRecognitionCommand>(SettingVoiceRecognitionCommandCallback);
                     
                     if (UseUnifiedService)
                     {
