@@ -87,7 +87,7 @@ namespace LKZ.Rolle
             // 注册统一服务事件监听
             if (UseUnifiedService)
             {
-                RegisterCommand.Register<UnifiedAudioStartCommand>(OnUnifiedAudioStart); // Added
+                // RegisterCommand.Register<UnifiedAudioStartCommand>(OnUnifiedAudioStart); // Added
                 RegisterCommand.Register<UnifiedAudioEndCommand>(OnUnifiedAudioEnd); // Added
                 RegisterCommand.Register<UnifiedServiceStateChangedCommand>(OnUnifiedServiceStateChanged); // Added
                 RegisterCommand.Register<UnifiedLLMResultCommand>(OnUnifiedLLMResult); // Added
@@ -241,7 +241,7 @@ namespace LKZ.Rolle
                     
                     if (UseUnifiedService)
                     {
-                        RegisterCommand.UnRegister<UnifiedAudioStartCommand>(OnUnifiedAudioStart);
+                        // RegisterCommand.UnRegister<UnifiedAudioStartCommand>(OnUnifiedAudioStart);
                         RegisterCommand.UnRegister<UnifiedAudioEndCommand>(OnUnifiedAudioEnd);
                         RegisterCommand.UnRegister<UnifiedServiceStateChangedCommand>(OnUnifiedServiceStateChanged);
                         RegisterCommand.UnRegister<UnifiedLLMResultCommand>(OnUnifiedLLMResult);

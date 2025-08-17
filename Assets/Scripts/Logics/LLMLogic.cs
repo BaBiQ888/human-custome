@@ -117,6 +117,7 @@ namespace LKZ.Logics
         /// </summary>
         private Coroutine _unifiedAudioSyncCoroutine; // Added
 
+        private bool isTalkingAnimationStarted = false;
 
         private string onceResult;
 
@@ -361,6 +362,8 @@ namespace LKZ.Logics
         {
             isStopCreate = true;
 
+            isTalkingAnimationStarted = false;
+
             _titleSynchronization_Cor = null;
             _unifiedAudioSyncCoroutine = null; // Added
             
@@ -466,19 +469,6 @@ namespace LKZ.Logics
                     else
                     {
                         Debug.Log($"📝 文本全为动作描述，跳过UI显示: '{command.text}'");
-                    }
-                }
-
-                if (command.isEnd)
-                {
-                    // LLM回复完成
-                    isRequestChatGPTContent = true;
-                    Debug.Log($"✅ LLM回复完成，总文本: '{currentLLMAccumulatedText}'");
-                    
-                    // 🔧 优化：当LLM完成且有音频时，统一启动
-                    if (_unifiedAudioSyncCoroutine == null && unifiedAudioQueue.Count > 0)
-                    {
-                        _unifiedAudioSyncCoroutine = _mono.StartCoroutine(OptimizedUnifiedAudioSynchronizationCoroutine());
                     }
                 }
             }
@@ -1766,13 +1756,19 @@ namespace LKZ.Logics
                 unifiedAudioQueue.Peek().isComplete && 
                 unifiedAudioQueue.Peek().generatedClip != null);
             
+            bool isFirstSegment = true;
+
             // 🔧 第二步：音频准备好了，启动动画
             Debug.Log("🎭 音频准备完成，启动动画");
-            SendCommand.Send(new ChatGPTStartTalkCommand());
+            // 🔧 第一个音频段需要特殊处理，确保动画同步
+            if (!isTalkingAnimationStarted)
+            {
+                SendCommand.Send(new ChatGPTStartTalkCommand());
+                isTalkingAnimationStarted = true;
+            }
             
             float idleTimeout = 3.0f;
             float idleTimer = 0f;
-            bool isFirstSegment = true;
 
             while (!isStopCreate && (unifiedAudioQueue.Count > 0 || !isRequestChatGPTContent))
             {
@@ -1811,25 +1807,11 @@ namespace LKZ.Logics
 
                 float actualDuration = segment.generatedClip.length;
                 
-                // 🔧 第一个音频段需要特殊处理，确保动画同步
-                if (isFirstSegment)
-                {
-                    Debug.Log($"🔊 播放首个音频段: '{segment.text.Substring(0, Math.Min(segment.text.Length, 30))}...', 时长: {actualDuration:F2}秒");
-                    
-                    // 🔧 修复：使用现有的命令确保动画激活
-                    SendCommand.Send(new ChatGPTStartTalkCommand());
-                    isFirstSegment = false;
-                }
-                else
-                {
-                    Debug.Log($"🔊 播放音频段: '{segment.text.Substring(0, Math.Min(segment.text.Length, 30))}...', 时长: {actualDuration:F2}秒");
-                }
-
                 // 🔧 音频播放
                 audioModel.Play(segment.generatedClip);
                 
                 // 🔧 启动字幕协程
-                _mono.StartCoroutine(PlaySubtitlesForSegment(segment, actualDuration));
+                _mono.StartCoroutine(PlaySubtitlesWithAnimationControl(segment, actualDuration));
 
                 // 🔧 等待播放完成
                 yield return new WaitWhile(() => audioModel.IsPlaying);
