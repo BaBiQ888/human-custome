@@ -393,50 +393,57 @@ var VoiceRecognizerPlugin = {
                 console.log('🎤 初始化录音开始时间:', new Date(now).toLocaleTimeString());
             }
 
-            // 检查最大录音时间
-            if (now - VoiceRecognizer.recordingStartTime > VoiceRecognizer.maxRecordingTime) {
-                //console.log('达到最大录音时间，停止发送音频');
-                return false;
-            }
-
             // 🔧 优化：使用动态静音阈值，考虑环境噪音
             var adaptiveThreshold = VoiceRecognizer.calculateAdaptiveThreshold(volume);
-            
-            // 检查音量阈值
+            var wasSending = VoiceRecognizer.isSendingAudio === true;
+
+            // 检查是否超过阈值（检测到说话）
             if (volume > adaptiveThreshold) {
-                // 有声音，重置静音计时
-                if (VoiceRecognizer.silenceStartTime > 0) {
-                    console.log('检测到声音，音量:', volume.toFixed(4), '阈值:', adaptiveThreshold.toFixed(4));
-                }
-                VoiceRecognizer.silenceStartTime = 0;
-                VoiceRecognizer.isSendingAudio = true;
-                return true;
-            } else {
-                // 静音检测
-                if (VoiceRecognizer.silenceStartTime === 0) {
-                    VoiceRecognizer.silenceStartTime = now;
-                    console.log('开始检测静音，当前音量:', volume.toFixed(4), '阈值:', adaptiveThreshold.toFixed(4));
+                // 从静音/未发送 -> 首次开始发送：重置单轮计时，避免跨很久导致被 maxRecordingTime 限制
+                if (!wasSending) {
+                    VoiceRecognizer.recordingStartTime = now;
+                    VoiceRecognizer.lastResultTime = now;
+                    VoiceRecognizer.silenceStartTime = 0;
+                    VoiceRecognizer.isSendingAudio = true;
+                    console.log('🎯 检测到新一轮发声，已重置本轮计时（recordingStartTime）');
+                    return true;
                 }
 
-                // 检查静音持续时间
-                var silenceDuration = now - VoiceRecognizer.silenceStartTime;
-                if (silenceDuration > VoiceRecognizer.silenceTimeout) {
-                    if (VoiceRecognizer.isSendingAudio) {
-                        console.log('静音超时，停止发送音频数据，静音时长:', silenceDuration + 'ms');
-                        VoiceRecognizer.handleSilence();
-                    }
+                // 已在发送中，检查单轮最大录音时长
+                if (now - VoiceRecognizer.recordingStartTime > VoiceRecognizer.maxRecordingTime) {
+                    console.log('⏱️ 达到单轮最大录音时间，暂停发送并等待静音结束');
+                    VoiceRecognizer.handleSilence();
                     return false;
                 }
 
-                // 🔧 修复：静音状态下不继续发送音频，避免浪费带宽
-                // 只有在刚开始检测到声音后的短暂静音期间才继续发送
-                var shortSilenceGracePeriod = 300; // 300ms的短暂静音容忍期
-                if (VoiceRecognizer.isSendingAudio && silenceDuration < shortSilenceGracePeriod) {
-                    return true; // 短暂静音，继续发送
-                }
-                
-                return false; // 长时间静音，停止发送
+                // 持续有声：保持发送
+                VoiceRecognizer.silenceStartTime = 0;
+                VoiceRecognizer.isSendingAudio = true;
+                return true;
             }
+
+            // ----- 静音处理逻辑 -----
+            if (VoiceRecognizer.silenceStartTime === 0) {
+                VoiceRecognizer.silenceStartTime = now;
+                console.log('开始检测静音，当前音量:', volume.toFixed(4), '阈值:', adaptiveThreshold.toFixed(4));
+            }
+
+            var silenceDuration = now - VoiceRecognizer.silenceStartTime;
+            if (silenceDuration > VoiceRecognizer.silenceTimeout) {
+                if (VoiceRecognizer.isSendingAudio) {
+                    console.log('静音超时，停止发送音频数据，静音时长:', silenceDuration + 'ms');
+                    VoiceRecognizer.handleSilence();
+                }
+                return false;
+            }
+
+            // 短静音宽限期内仍允许发送，避免断断续续
+            var shortSilenceGracePeriod = 300; // 300ms的短暂静音容忍期
+            if (VoiceRecognizer.isSendingAudio && silenceDuration < shortSilenceGracePeriod) {
+                return true;
+            }
+
+            return false;
         },
 
         // 处理静音状态
